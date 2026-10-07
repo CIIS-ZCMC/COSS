@@ -1,0 +1,231 @@
+<?php
+
+namespace Tests\Feature;
+
+use App\Models\ClientApplication;
+use App\Models\FileDownloadLink;
+use App\Models\FileRecord;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Storage;
+use Tests\TestCase;
+
+class FileDownloadRestrictionsTest extends TestCase
+{
+    use RefreshDatabase;
+
+    protected ClientApplication $client;
+
+    protected string $plainSecret = 'super-secret-key-123';
+
+    protected FileRecord $cleanFile;
+
+    protected string $fileContent = 'Confidential Patient Record for Testing';
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        Storage::fake('staging');
+        Storage::fake('nas');
+        Storage::fake('quarantine');
+
+        $this->client = ClientApplication::create([
+            'name' => 'Internal Hospital EHR Client',
+            'api_key' => 'ehr-api-key-test',
+            'api_secret_hash' => Hash::make($this->plainSecret),
+            'is_active' => true,
+        ]);
+
+        $storagePath = 'uploads/'.$this->client->uuid.'/test_record.pdf';
+        Storage::disk('nas')->put($storagePath, $this->fileContent);
+
+        $this->cleanFile = FileRecord::create([
+            'client_application_id' => $this->client->id,
+            'original_filename' => 'patient_report.pdf',
+            'stored_filename' => 'test_record.pdf',
+            'mime_type' => 'application/pdf',
+            'size_bytes' => strlen($this->fileContent),
+            'sha256_checksum' => hash('sha256', $this->fileContent),
+            'disk' => 'nas',
+            'storage_path' => $storagePath,
+            'status' => 'clean',
+        ]);
+    }
+
+    protected function authHeaders(): array
+    {
+        return [
+            'X-API-Key' => $this->client->api_key,
+            'X-API-Secret' => $this->plainSecret,
+        ];
+    }
+
+    public function test_signed_url_generation_supports_restrictions_parameters(): void
+    {
+        $response = $this->withHeaders($this->authHeaders())
+            ->postJson("/api/v1/files/{$this->cleanFile->uuid}/signed-url", [
+                'expires_in_minutes' => 60,
+                'max_downloads' => 3,
+                'allowed_ips' => ['127.0.0.1', '192.168.1.100'],
+                'password' => 'SecurePass123!',
+            ]);
+
+        $response->assertStatus(200)
+            ->assertJsonStructure(['download_url', 'link_token', 'expires_at', 'max_downloads', 'password_required'])
+            ->assertJsonPath('max_downloads', 3)
+            ->assertJsonPath('password_required', true);
+
+        $token = $response->json('link_token');
+
+        $this->assertDatabaseHas('file_download_links', [
+            'token' => $token,
+            'file_record_id' => $this->cleanFile->id,
+            'client_application_id' => $this->client->id,
+            'max_downloads' => 3,
+            'download_count' => 0,
+            'is_revoked' => false,
+        ]);
+    }
+
+    public function test_link_enforces_max_downloads_limit(): void
+    {
+        $response = $this->withHeaders($this->authHeaders())
+            ->postJson("/api/v1/files/{$this->cleanFile->uuid}/signed-url", [
+                'max_downloads' => 2,
+            ]);
+
+        $downloadUrl = $response->json('download_url');
+
+        // First download - Success
+        $resp1 = $this->get($downloadUrl);
+        $resp1->assertStatus(200);
+        $this->assertEquals($this->fileContent, $resp1->streamedContent());
+
+        // Second download - Success
+        $resp2 = $this->get($downloadUrl);
+        $resp2->assertStatus(200);
+
+        // Third download - Exceeded limit
+        $resp3 = $this->get($downloadUrl);
+        $resp3->assertStatus(403)
+            ->assertJsonPath('error', 'DownloadLimitReached');
+    }
+
+    public function test_link_enforces_ip_restriction(): void
+    {
+        $response = $this->withHeaders($this->authHeaders())
+            ->postJson("/api/v1/files/{$this->cleanFile->uuid}/signed-url", [
+                'allowed_ips' => ['192.168.1.50'],
+            ]);
+
+        $downloadUrl = $response->json('download_url');
+
+        // Access from unauthorized IP (default 127.0.0.1)
+        $respUnauthorized = $this->get($downloadUrl, ['REMOTE_ADDR' => '10.0.0.99']);
+        $respUnauthorized->assertStatus(403)
+            ->assertJsonPath('error', 'IpRestrictionDenied');
+
+        // Access from authorized IP
+        $respAuthorized = $this->withServerVariables(['REMOTE_ADDR' => '192.168.1.50'])->get($downloadUrl);
+        $respAuthorized->assertStatus(200);
+    }
+
+    public function test_link_enforces_password_protection(): void
+    {
+        $password = 'SecretMedicalDoc2026';
+        $response = $this->withHeaders($this->authHeaders())
+            ->postJson("/api/v1/files/{$this->cleanFile->uuid}/signed-url", [
+                'password' => $password,
+            ]);
+
+        $downloadUrl = $response->json('download_url');
+
+        // Try download without password
+        $unauthResp = $this->get($downloadUrl);
+        $unauthResp->assertStatus(401)
+            ->assertJsonPath('error', 'PasswordRequired');
+
+        // Try download with wrong password
+        $wrongPassResp = $this->get($downloadUrl, [
+            'X-Download-Password' => 'WrongPassword',
+        ]);
+        $wrongPassResp->assertStatus(401)
+            ->assertJsonPath('error', 'PasswordRequired');
+
+        // Download with correct password header
+        $correctPassResp = $this->get($downloadUrl, [
+            'X-Download-Password' => $password,
+        ]);
+        $correctPassResp->assertStatus(200);
+
+        // Download with password query parameter
+        $paramPassResp = $this->get($downloadUrl.'&password='.$password);
+        $paramPassResp->assertStatus(200);
+    }
+
+    public function test_revoked_link_is_blocked_immediately(): void
+    {
+        $response = $this->withHeaders($this->authHeaders())
+            ->postJson("/api/v1/files/{$this->cleanFile->uuid}/signed-url");
+
+        $downloadUrl = $response->json('download_url');
+        $token = $response->json('link_token');
+
+        // Revoke the link via management toggle
+        $toggleResp = $this->postJson("/api/management/links/{$token}/revoke-toggle");
+        $toggleResp->assertStatus(200)
+            ->assertJsonPath('link.is_revoked', true);
+
+        // Access download now -> blocked
+        $blockedResp = $this->get($downloadUrl);
+        $blockedResp->assertStatus(403)
+            ->assertJsonPath('error', 'LinkRevoked');
+
+        // Reactivate the link
+        $this->postJson("/api/management/links/{$token}/revoke-toggle")
+            ->assertStatus(200)
+            ->assertJsonPath('link.is_revoked', false);
+
+        // Access download again -> allowed
+        $this->get($downloadUrl)->assertStatus(200);
+    }
+
+    public function test_expired_link_is_rejected(): void
+    {
+        $link = FileDownloadLink::create([
+            'token' => 'expired-token-uuid',
+            'file_record_id' => $this->cleanFile->id,
+            'client_application_id' => $this->client->id,
+            'is_revoked' => false,
+            'expires_at' => now()->subMinutes(10), // expired 10 minutes ago
+        ]);
+
+        $this->assertTrue($link->isExpired());
+    }
+
+    public function test_management_api_can_list_filter_and_create_links(): void
+    {
+        // 1. Create a link via Management API
+        $createResp = $this->postJson('/api/management/links', [
+            'file_uuid' => $this->cleanFile->uuid,
+            'expires_in_minutes' => 120,
+            'max_downloads' => 5,
+            'password' => 'Passcode123',
+        ]);
+
+        $createResp->assertStatus(201)
+            ->assertJsonPath('link.max_downloads', 5)
+            ->assertJsonPath('link.has_password', true);
+
+        // 2. List links
+        $listResp = $this->getJson('/api/management/links');
+        $listResp->assertStatus(200);
+        $this->assertNotEmpty($listResp->json('data'));
+
+        // 3. Purge expired links endpoint
+        $purgeResp = $this->postJson('/api/management/links/purge-expired');
+        $purgeResp->assertStatus(200)
+            ->assertJsonStructure(['message', 'purged_count']);
+    }
+}
