@@ -8,6 +8,7 @@ use App\Models\FileRecord;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 use Tests\TestCase;
 
 class FileDownloadRestrictionsTest extends TestCase
@@ -227,5 +228,111 @@ class FileDownloadRestrictionsTest extends TestCase
         $purgeResp = $this->postJson('/api/management/links/purge-expired');
         $purgeResp->assertStatus(200)
             ->assertJsonStructure(['message', 'purged_count']);
+    }
+
+    public function test_link_supports_inline_file_view(): void
+    {
+        $response = $this->withHeaders($this->authHeaders())
+            ->postJson("/api/v1/files/{$this->cleanFile->uuid}/signed-url", [
+                'expires_in_minutes' => 60,
+            ]);
+
+        $downloadUrl = $response->json('download_url');
+
+        // Request inline view with ?view=1
+        $viewUrl = $downloadUrl.'&view=1';
+        $viewResp = $this->get($viewUrl);
+
+        $viewResp->assertStatus(200);
+        $viewResp->assertHeader('Content-Disposition', 'inline; filename=patient_report.pdf');
+        $viewResp->assertHeader('Content-Type', 'application/pdf');
+        $this->assertEquals($this->fileContent, $viewResp->streamedContent());
+    }
+
+    public function test_signed_url_creation_returns_portal_url(): void
+    {
+        $response = $this->withHeaders($this->authHeaders())
+            ->postJson("/api/v1/files/{$this->cleanFile->uuid}/signed-url", [
+                'expires_in_minutes' => 60,
+            ]);
+
+        $response->assertStatus(200);
+        $token = $response->json('link_token');
+        $portalUrl = $response->json('portal_url');
+
+        $this->assertNotEmpty($token);
+        $this->assertStringContainsString('/d/'.$token, $portalUrl);
+    }
+
+    public function test_short_portal_routes_serve_app_view_and_file_info(): void
+    {
+        $link = FileDownloadLink::create([
+            'token' => (string) Str::uuid(),
+            'file_record_id' => $this->cleanFile->id,
+            'client_application_id' => $this->client->id,
+            'download_count' => 0,
+            'is_revoked' => false,
+            'expires_at' => now()->addHour(),
+        ]);
+
+        // 1. Browser visit to /d/{token} loads the app view
+        $portalResp = $this->get('/d/'.$link->token, ['Accept' => 'text/html']);
+        $portalResp->assertStatus(200);
+        $portalResp->assertViewIs('app');
+
+        // 2. Info request to /d/{token}/info returns metadata
+        $infoResp = $this->getJson('/d/'.$link->token.'/info');
+        $infoResp->assertStatus(200)
+            ->assertJsonPath('file.original_filename', 'patient_report.pdf')
+            ->assertJsonPath('file.status', 'clean')
+            ->assertJsonPath('link.is_expired', false);
+
+        // 3. Direct stream via /d/{token}?stream=1
+        $streamResp = $this->get('/d/'.$link->token.'?stream=1');
+        $streamResp->assertStatus(200);
+        $this->assertEquals($this->fileContent, $streamResp->streamedContent());
+    }
+
+    public function test_short_portal_with_password_enforcement(): void
+    {
+        $link = FileDownloadLink::create([
+            'token' => (string) Str::uuid(),
+            'file_record_id' => $this->cleanFile->id,
+            'client_application_id' => $this->client->id,
+            'download_count' => 0,
+            'password_hash' => Hash::make('SecretPass123'),
+            'is_revoked' => false,
+            'expires_at' => now()->addHour(),
+        ]);
+
+        // Direct stream without password should be 401
+        $deniedResp = $this->getJson('/d/'.$link->token.'?stream=1');
+        $deniedResp->assertStatus(401)
+            ->assertJsonPath('error', 'PasswordRequired');
+
+        // Direct stream with correct password in query
+        $streamResp = $this->get('/d/'.$link->token.'?stream=1&password=SecretPass123');
+        $streamResp->assertStatus(200);
+        $this->assertEquals($this->fileContent, $streamResp->streamedContent());
+    }
+
+    public function test_browser_navigation_redirects_from_api_download_to_short_portal(): void
+    {
+        $response = $this->withHeaders($this->authHeaders())
+            ->postJson("/api/v1/files/{$this->cleanFile->uuid}/signed-url", [
+                'expires_in_minutes' => 60,
+            ]);
+
+        $downloadUrl = $response->json('download_url');
+        $token = $response->json('link_token');
+
+        // Browser navigation with text/html header
+        $browserResp = $this->get($downloadUrl, [
+            'Accept' => 'text/html,application/xhtml+xml,application/xml;q=0.9',
+            'X-Simulate-Browser' => '1',
+        ]);
+
+        $browserResp->assertStatus(302);
+        $browserResp->assertRedirect(url('/d/'.$token));
     }
 }

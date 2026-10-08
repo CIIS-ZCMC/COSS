@@ -41,6 +41,7 @@ export default function LinksManagement({ onRefreshStats }) {
     const [createFormData, setCreateFormData] = useState({
         file_uuid: '',
         expires_in_minutes: 60,
+        no_expiry: false,
         max_downloads: '',
         allowed_ips: '',
         password: '',
@@ -53,6 +54,7 @@ export default function LinksManagement({ onRefreshStats }) {
     const [editingLink, setEditingLink] = useState(null);
     const [editFormData, setEditFormData] = useState({
         expires_at: '',
+        no_expiry: false,
         max_downloads: '',
         allowed_ips: '',
         password: '',
@@ -80,6 +82,7 @@ export default function LinksManagement({ onRefreshStats }) {
 
         setEditFormData({
             expires_at: localExpires,
+            no_expiry: !link.expires_at,
             max_downloads: link.max_downloads !== null ? link.max_downloads.toString() : '',
             allowed_ips: link.allowed_ips && link.allowed_ips.length ? link.allowed_ips.join(', ') : '',
             password: '',
@@ -99,7 +102,8 @@ export default function LinksManagement({ onRefreshStats }) {
                 : null;
 
             const payload = {
-                expires_at: editFormData.expires_at ? new Date(editFormData.expires_at).toISOString() : null,
+                expires_at: (!editFormData.no_expiry && editFormData.expires_at) ? new Date(editFormData.expires_at).toISOString() : null,
+                clear_expires_at: editFormData.no_expiry,
                 max_downloads: editFormData.max_downloads !== '' ? parseInt(editFormData.max_downloads, 10) : null,
                 clear_max_downloads: editFormData.max_downloads === '',
                 allowed_ips: ips,
@@ -208,7 +212,7 @@ export default function LinksManagement({ onRefreshStats }) {
 
             const payload = {
                 file_uuid: createFormData.file_uuid.trim(),
-                expires_in_minutes: parseInt(createFormData.expires_in_minutes, 10),
+                expires_in_minutes: createFormData.no_expiry ? 0 : parseInt(createFormData.expires_in_minutes, 10),
                 max_downloads: createFormData.max_downloads ? parseInt(createFormData.max_downloads, 10) : null,
                 allowed_ips: allowedIps,
                 password: createFormData.password || null,
@@ -223,6 +227,7 @@ export default function LinksManagement({ onRefreshStats }) {
             setCreateFormData({
                 file_uuid: '',
                 expires_in_minutes: 60,
+                no_expiry: false,
                 max_downloads: '',
                 allowed_ips: '',
                 password: '',
@@ -468,19 +473,25 @@ export default function LinksManagement({ onRefreshStats }) {
 
                                         {/* Expires */}
                                         <td className="py-3.5 px-4 text-[11px]">
-                                            <div className={link.is_expired ? 'text-rose-400 font-semibold' : 'text-slate-300'}>
-                                                {formatDate(link.expires_at)}
-                                            </div>
+                                            {link.expires_at ? (
+                                                <div className={link.is_expired ? 'text-rose-400 font-semibold' : 'text-slate-300'}>
+                                                    {formatDate(link.expires_at)}
+                                                </div>
+                                            ) : (
+                                                <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-cyan-950/80 text-cyan-400 border border-cyan-800">
+                                                    No Expiry (Permanent)
+                                                </span>
+                                            )}
                                         </td>
 
                                         {/* Actions */}
                                         <td className="py-3.5 px-4 text-right">
                                             <div className="flex items-center justify-end gap-1.5">
-                                                {link.download_url && (
+                                                {(link.portal_url || link.download_url) && (
                                                     <button
-                                                        onClick={() => handleCopy(link.download_url, link.token)}
+                                                        onClick={() => handleCopy(link.portal_url || link.download_url, link.token)}
                                                         className="p-1.5 text-slate-400 hover:text-cyan-300 bg-slate-950 border border-slate-800 hover:border-slate-700 rounded-md transition"
-                                                        title="Copy Signed Download URL"
+                                                        title="Copy Short Portal URL (/d/{token})"
                                                     >
                                                         {copiedToken === link.token ? (
                                                             <Check className="w-3.5 h-3.5 text-emerald-400" />
@@ -591,17 +602,17 @@ export default function LinksManagement({ onRefreshStats }) {
 
                                 <div>
                                     <label className="text-[11px] uppercase tracking-wider text-slate-400 font-semibold mb-1 block">
-                                        Temporary Signed Download URL
+                                        Short Download Portal URL
                                     </label>
                                     <div className="flex items-center gap-2">
                                         <input
                                             type="text"
                                             readOnly
-                                            value={createdLinkResult.download_url}
+                                            value={createdLinkResult.portal_url || createdLinkResult.download_url}
                                             className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs font-mono text-cyan-300"
                                         />
                                         <button
-                                            onClick={() => handleCopy(createdLinkResult.download_url, 'new-link')}
+                                            onClick={() => handleCopy(createdLinkResult.portal_url || createdLinkResult.download_url, 'new-link')}
                                             className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-lg text-xs font-medium flex items-center gap-1 shrink-0"
                                         >
                                             {copiedToken === 'new-link' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
@@ -611,7 +622,7 @@ export default function LinksManagement({ onRefreshStats }) {
                                 </div>
 
                                 <div className="bg-slate-950 p-3 rounded-lg border border-slate-800 text-xs space-y-1.5 text-slate-300 font-mono">
-                                    <div>Expires: <strong className="text-cyan-400">{formatDate(createdLinkResult.expires_at)}</strong></div>
+                                    <div>Expires: <strong className="text-cyan-400">{createdLinkResult.expires_at ? formatDate(createdLinkResult.expires_at) : 'No Expiry (Permanent)'}</strong></div>
                                     <div>Max Downloads: <strong className="text-amber-400">{createdLinkResult.max_downloads || 'Unlimited'}</strong></div>
                                     <div>Password: <strong className="text-indigo-400">{createdLinkResult.has_password ? 'Enabled (Hashed)' : 'None'}</strong></div>
                                 </div>
@@ -642,18 +653,33 @@ export default function LinksManagement({ onRefreshStats }) {
 
                                 <div className="grid grid-cols-2 gap-3">
                                     <div>
-                                        <label className="text-slate-300 font-medium block mb-1">
-                                            Expires In (Minutes)
-                                        </label>
+                                        <div className="flex items-center justify-between mb-1">
+                                            <label className="text-slate-300 font-medium">
+                                                Expires In (Minutes)
+                                            </label>
+                                            <label className="flex items-center gap-1.5 text-[11px] text-cyan-400 cursor-pointer">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={createFormData.no_expiry}
+                                                    onChange={(e) => setCreateFormData({ ...createFormData, no_expiry: e.target.checked })}
+                                                    className="rounded bg-slate-900 border-slate-700 text-cyan-500 focus:ring-0 focus:ring-offset-0"
+                                                />
+                                                <span>No Expiry</span>
+                                            </label>
+                                        </div>
                                         <input
                                             type="number"
                                             min="1"
                                             max="10080"
-                                            value={createFormData.expires_in_minutes}
+                                            disabled={createFormData.no_expiry}
+                                            value={createFormData.no_expiry ? '' : createFormData.expires_in_minutes}
+                                            placeholder={createFormData.no_expiry ? 'Never expires (Permanent)' : 'Minutes'}
                                             onChange={(e) => setCreateFormData({ ...createFormData, expires_in_minutes: e.target.value })}
-                                            className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-cyan-500"
+                                            className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-cyan-500 disabled:opacity-50 disabled:bg-slate-900"
                                         />
-                                        <p className="text-[10px] text-slate-500 mt-0.5">e.g. 60 = 1 hr, 1440 = 24 hrs</p>
+                                        <p className="text-[10px] text-slate-500 mt-0.5">
+                                            {createFormData.no_expiry ? 'Link will remain active permanently until revoked.' : 'e.g. 60 = 1 hr, 1440 = 24 hrs'}
+                                        </p>
                                     </div>
 
                                     <div>
@@ -756,17 +782,33 @@ export default function LinksManagement({ onRefreshStats }) {
                         <form onSubmit={handleUpdateLink} className="space-y-4 text-xs">
                             {/* Expiration date & time picker */}
                             <div>
-                                <label className="text-slate-300 font-medium block mb-1">
-                                    Expiration Date & Time (Local Time)
-                                </label>
+                                <div className="flex items-center justify-between mb-1">
+                                    <label className="text-slate-300 font-medium">
+                                        Expiration Date & Time (Local Time)
+                                    </label>
+                                    <label className="flex items-center gap-1.5 text-[11px] text-cyan-400 cursor-pointer">
+                                        <input
+                                            type="checkbox"
+                                            checked={editFormData.no_expiry}
+                                            onChange={(e) => setEditFormData({ ...editFormData, no_expiry: e.target.checked })}
+                                            className="rounded bg-slate-900 border-slate-700 text-cyan-500 focus:ring-0 focus:ring-offset-0"
+                                        />
+                                        <span>No Expiry (Permanent)</span>
+                                    </label>
+                                </div>
                                 <input
                                     type="datetime-local"
-                                    required
-                                    value={editFormData.expires_at}
+                                    required={!editFormData.no_expiry}
+                                    disabled={editFormData.no_expiry}
+                                    value={editFormData.no_expiry ? '' : editFormData.expires_at}
                                     onChange={(e) => setEditFormData({ ...editFormData, expires_at: e.target.value })}
-                                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-cyan-500 [color-scheme:dark]"
+                                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-cyan-500 [color-scheme:dark] disabled:opacity-50 disabled:bg-slate-900"
                                 />
-                                <p className="text-[10px] text-slate-500 mt-1">Adjust when this link will automatically expire and stop working.</p>
+                                <p className="text-[10px] text-slate-500 mt-1">
+                                    {editFormData.no_expiry
+                                        ? 'Link will never expire and can be downloaded indefinitely.'
+                                        : 'Adjust when this link will automatically expire and stop working.'}
+                                </p>
                             </div>
 
                             {/* Max downloads */}

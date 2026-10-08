@@ -121,7 +121,7 @@ curl -X GET http://localhost:8000/api/v1/files/{FILE_UUID} \
   -H "X-API-Secret: YOUR_API_SECRET"
 ```
 
-### C. Request Temporary Signed Download URL (With Restrictions)
+### C. Request Signed Download URL (With Restrictions & Unlimited / No Expiry)
 ```bash
 curl -X POST http://localhost:8000/api/v1/files/{FILE_UUID}/signed-url \
   -H "X-API-Key: YOUR_API_KEY" \
@@ -135,21 +135,54 @@ curl -X POST http://localhost:8000/api/v1/files/{FILE_UUID}/signed-url \
   }'
 ```
 
-Supported restriction parameters:
-- `expires_in_minutes`: Lifetime of the download link (1 to 10,080 minutes / 7 days).
-- `max_downloads`: Maximum allowed downloads before link automatically invalidates (e.g. 1 for one-time links).
-- `allowed_ips`: Array of authorized IPv4/IPv6 client IP addresses.
-- `password`: Optional password requirement.
-
-### D. Download File via Signed URL
+#### Permanent / No-Expiration Signed URL Example:
+Set `"expires_in_minutes": 0` (or omit the parameter) to generate a permanent signed URL without expiration:
 ```bash
-# Standard download:
+curl -X POST http://localhost:8000/api/v1/files/{FILE_UUID}/signed-url \
+  -H "X-API-Key: YOUR_API_KEY" \
+  -H "X-API-Secret: YOUR_API_SECRET" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "expires_in_minutes": 0,
+    "max_downloads": 10,
+    "password": "OptionalSecretPassword"
+  }'
+```
+
+Supported restriction parameters:
+- `expires_in_minutes`: Lifetime of the download link (1 to 10,080 minutes / 7 days). Set to `0` or omit for **No Expiry / Permanent** link.
+- `max_downloads`: Maximum allowed downloads before link automatically invalidates (e.g. 1 for one-time links; omit for unlimited).
+- `allowed_ips`: Array of authorized IPv4/IPv6 client IP addresses (omit for all IPs).
+- `password`: Optional password requirement (minimum 4 characters).
+
+### D. Download or Stream / Preview File via Signed URL
+```bash
+# Standard temporary download:
 curl -O "http://localhost:8000/api/v1/files/download/{FILE_UUID}?expires=...&signature=...&link=..."
+
+# Permanent download (no expiration parameter):
+curl -O "http://localhost:8000/api/v1/files/download/{FILE_UUID}?signature=...&link=..."
+
+# Stream / Inline View (for browser embedding, PDF preview, image/video playback):
+# Append &view=1 to request 'Content-Disposition: inline' with 'Accept-Ranges: bytes'
+curl "http://localhost:8000/api/v1/files/download/{FILE_UUID}?signature=...&link=...&view=1"
 
 # Download with Password Protection (Header or Query parameter):
 curl -H "X-Download-Password: ConfidentialPasscode123" \
-  -O "http://localhost:8000/api/v1/files/download/{FILE_UUID}?expires=...&signature=...&link=..."
+  -O "http://localhost:8000/api/v1/files/download/{FILE_UUID}?signature=...&link=..."
+
+# Stream / View with Password Protection:
+curl -H "X-Download-Password: ConfidentialPasscode123" \
+  "http://localhost:8000/api/v1/files/download/{FILE_UUID}?signature=...&link=...&view=1"
 ```
+
+> **Client Integration Best Practice (URL Caching, Reuse & UI Redirection)**:
+> 1. Requesting a signed URL should be done **on-demand** and stored in the client database (`download_url`, `link_token`).
+> 2. Once generated with `expires_in_minutes: 0` (permanent), client systems should reuse the stored `download_url` for all subsequent views and downloads rather than re-requesting a new link on every user click.
+> 3. Handling Restrictions & Security Responses:
+>    - **Programmatic requests**: If restrictions are hit, COSS returns structured JSON (e.g. `401 {"error": "PasswordRequired"}`, `403 {"error": "LinkRevoked"}`, `403 {"error": "DownloadLimitReached"}`, or `410 {"error": "LinkExpired"}`).
+>    - **Browser users**: When receiving a `401`, `403`, or `410` from the backend stream, client applications should redirect the user's browser directly to the stored `download_url` (`return redirect()->away($downloadUrl);`). The browser loads the interactive COSS Download Portal UI, displaying a user-friendly status banner (e.g., *'Link Revoked'*, *'Download Limit Reached'*, *'Link Expired'*), or the passcode entry form.
+
 
 
 ### E. Chunked Upload (for Large Files)

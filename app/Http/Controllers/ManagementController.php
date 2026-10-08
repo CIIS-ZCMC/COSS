@@ -400,18 +400,21 @@ class ManagementController extends Controller
         $links->getCollection()->transform(function ($link) {
             $url = $link->original_signed_url;
             if (! $url && $link->fileRecord) {
-                $url = URL::temporarySignedRoute(
-                    'api.files.download',
-                    $link->expires_at,
-                    [
-                        'uuid' => $link->fileRecord->uuid,
-                        'link' => $link->token,
-                    ]
-                );
+                $routeParams = [
+                    'uuid' => $link->fileRecord->uuid,
+                    'link' => $link->token,
+                ];
+                $url = $link->expires_at
+                    ? URL::temporarySignedRoute('api.files.download', $link->expires_at, $routeParams)
+                    : URL::signedRoute('api.files.download', $routeParams);
             }
 
+            $portalUrl = url("/d/{$link->token}");
+
             return array_merge($link->toArray(), [
+                'portal_url' => $portalUrl,
                 'download_url' => $url,
+                'api_signed_url' => $url,
                 'is_expired' => $link->isExpired(),
                 'has_password' => ! empty($link->password_hash),
             ]);
@@ -427,7 +430,7 @@ class ManagementController extends Controller
     {
         $validated = $request->validate([
             'file_uuid' => 'required|string|exists:file_records,uuid',
-            'expires_in_minutes' => 'nullable|integer|min:1|max:10080',
+            'expires_in_minutes' => 'nullable|integer|min:0|max:10080',
             'max_downloads' => 'nullable|integer|min:1|max:10000',
             'allowed_ips' => 'nullable|array',
             'allowed_ips.*' => 'string',
@@ -443,21 +446,21 @@ class ManagementController extends Controller
             ], 422);
         }
 
-        $expiresInMinutes = (int) ($validated['expires_in_minutes'] ?? 60);
-        $expiresAt = now()->addMinutes($expiresInMinutes);
+        $expiresInMinutes = ! empty($validated['expires_in_minutes']) ? (int) $validated['expires_in_minutes'] : null;
+        $expiresAt = $expiresInMinutes ? now()->addMinutes($expiresInMinutes) : null;
         $maxDownloads = isset($validated['max_downloads']) ? (int) $validated['max_downloads'] : null;
         $allowedIps = $validated['allowed_ips'] ?? null;
         $password = $validated['password'] ?? null;
 
         $token = (string) Str::uuid();
-        $signedUrl = URL::temporarySignedRoute(
-            'api.files.download',
-            $expiresAt,
-            [
-                'uuid' => $file->uuid,
-                'link' => $token,
-            ]
-        );
+        $routeParams = [
+            'uuid' => $file->uuid,
+            'link' => $token,
+        ];
+
+        $signedUrl = $expiresAt
+            ? URL::temporarySignedRoute('api.files.download', $expiresAt, $routeParams)
+            : URL::signedRoute('api.files.download', $routeParams);
 
         $link = FileDownloadLink::create([
             'token' => $token,
@@ -474,16 +477,20 @@ class ManagementController extends Controller
 
         $this->auditLogger->log('management.link_created', $file->clientApplication, $file, [
             'link_token' => $link->token,
-            'expires_at' => $expiresAt->toIso8601String(),
+            'expires_at' => $expiresAt?->toIso8601String(),
             'max_downloads' => $maxDownloads,
             'allowed_ips' => $allowedIps,
             'has_password' => ! empty($password),
         ], $request);
 
+        $portalUrl = url("/d/{$link->token}");
+
         return response()->json([
             'message' => 'Download link created successfully.',
             'link' => array_merge($link->toArray(), [
+                'portal_url' => $portalUrl,
                 'download_url' => $signedUrl,
+                'api_signed_url' => $signedUrl,
                 'has_password' => ! empty($password),
                 'file_record' => $file,
             ]),
@@ -530,14 +537,30 @@ class ManagementController extends Controller
             'clear_password' => 'nullable|boolean',
             'clear_max_downloads' => 'nullable|boolean',
             'clear_allowed_ips' => 'nullable|boolean',
+            'clear_expires_at' => 'nullable|boolean',
         ]);
 
         $updates = [];
 
-        if (! empty($validated['expires_at'])) {
+        if (! empty($validated['clear_expires_at'])) {
+            $updates['expires_at'] = null;
+            // Generate a permanent signed route URL
+            $updates['original_signed_url'] = URL::signedRoute('api.files.download', [
+                'uuid' => $link->fileRecord->uuid,
+                'link' => $link->token,
+            ]);
+        } elseif (! empty($validated['expires_at'])) {
             $updates['expires_at'] = Carbon::parse($validated['expires_at'])->setTimezone(config('app.timezone'));
+            $updates['original_signed_url'] = URL::temporarySignedRoute('api.files.download', $updates['expires_at'], [
+                'uuid' => $link->fileRecord->uuid,
+                'link' => $link->token,
+            ]);
         } elseif (! empty($validated['expires_in_minutes'])) {
             $updates['expires_at'] = now()->addMinutes((int) $validated['expires_in_minutes']);
+            $updates['original_signed_url'] = URL::temporarySignedRoute('api.files.download', $updates['expires_at'], [
+                'uuid' => $link->fileRecord->uuid,
+                'link' => $link->token,
+            ]);
         }
 
         if (! empty($validated['clear_max_downloads'])) {
@@ -562,14 +585,13 @@ class ManagementController extends Controller
 
         $downloadUrl = $link->original_signed_url;
         if (! $downloadUrl && $link->fileRecord) {
-            $downloadUrl = URL::temporarySignedRoute(
-                'api.files.download',
-                $link->expires_at,
-                [
-                    'uuid' => $link->fileRecord->uuid,
-                    'link' => $link->token,
-                ]
-            );
+            $routeParams = [
+                'uuid' => $link->fileRecord->uuid,
+                'link' => $link->token,
+            ];
+            $downloadUrl = $link->expires_at
+                ? URL::temporarySignedRoute('api.files.download', $link->expires_at, $routeParams)
+                : URL::signedRoute('api.files.download', $routeParams);
         }
 
         $this->auditLogger->log('management.link_restrictions_updated', $link->clientApplication, $link->fileRecord, [
@@ -577,10 +599,14 @@ class ManagementController extends Controller
             'updated_fields' => array_keys($updates),
         ], $request);
 
+        $portalUrl = url("/d/{$link->token}");
+
         return response()->json([
             'message' => 'Link restrictions updated successfully.',
             'link' => array_merge($link->fresh()->toArray(), [
+                'portal_url' => $portalUrl,
                 'download_url' => $downloadUrl,
+                'api_signed_url' => $downloadUrl,
                 'has_password' => ! empty($link->password_hash),
                 'is_expired' => $link->isExpired(),
             ]),

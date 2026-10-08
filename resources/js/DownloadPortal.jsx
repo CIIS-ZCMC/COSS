@@ -11,7 +11,10 @@ import {
     HardDrive, 
     Key, 
     ExternalLink, 
-    RefreshCw
+    RefreshCw,
+    Eye,
+    X,
+    Maximize2
 } from 'lucide-react';
 import { fetchJson, formatBytes, formatDate } from './api';
 
@@ -24,7 +27,8 @@ export default function DownloadPortal() {
     const [authError, setAuthError] = useState('');
 
     const [downloadComplete, setDownloadComplete] = useState(false);
-    const [secondsToClose, setSecondsToClose] = useState(null);
+    const [showPreview, setShowPreview] = useState(false);
+    const [previewLoading, setPreviewLoading] = useState(false);
 
     const currentUrl = window.location.href;
     const path = window.location.pathname; // e.g. /api/v1/files/download/{uuid}
@@ -32,6 +36,15 @@ export default function DownloadPortal() {
 
     // Construct info URL
     const infoUrl = `${path}/info${search}`;
+
+    const getInlineViewUrl = (pass = '') => {
+        const params = new URLSearchParams(window.location.search);
+        params.set('view', '1');
+        if (pass.trim()) {
+            params.set('password', pass.trim());
+        }
+        return `${window.location.pathname}?${params.toString()}`;
+    };
 
     const triggerDirectDownload = async (pass = '') => {
         setDownloading(true);
@@ -80,18 +93,6 @@ export default function DownloadPortal() {
 
         setDownloadComplete(true);
         setDownloading(false);
-        setSecondsToClose(3);
-
-        // Attempt window.close() after brief countdown
-        let count = 3;
-        const interval = setInterval(() => {
-            count -= 1;
-            setSecondsToClose(count);
-            if (count <= 0) {
-                clearInterval(interval);
-                window.close();
-            }
-        }, 1000);
     };
 
     const loadLinkInfo = async () => {
@@ -121,6 +122,14 @@ export default function DownloadPortal() {
         loadLinkInfo();
     }, []);
 
+    useEffect(() => {
+        if (info?.file?.original_filename) {
+            document.title = `${info.file.original_filename} - Secure Download | ZCMC COSS`;
+        } else {
+            document.title = 'Secure File Download | ZCMC COSS';
+        }
+    }, [info]);
+
     const handleDownload = (e) => {
         e.preventDefault();
         setAuthError('');
@@ -131,6 +140,46 @@ export default function DownloadPortal() {
         }
 
         triggerDirectDownload(password);
+    };
+
+    const handleOpenPreview = async () => {
+        setAuthError('');
+
+        if (info?.link?.has_password && !password.trim()) {
+            setAuthError('Please enter the required passcode to preview this file.');
+            return;
+        }
+
+        const previewUrl = getInlineViewUrl(password);
+
+        // If password is required or provided, verify passcode before rendering preview
+        if (info?.link?.has_password || password.trim()) {
+            setPreviewLoading(true);
+            try {
+                const response = await fetch(previewUrl, {
+                    method: 'GET',
+                    headers: { 'Accept': '*/*' },
+                });
+
+                if (!response.ok) {
+                    const data = await response.json().catch(() => null);
+                    if (response.status === 401 || data?.error === 'PasswordRequired') {
+                        setAuthError('Incorrect passcode. Please check the passcode and try again.');
+                    } else {
+                        setAuthError(data?.message || 'Access verification failed.');
+                    }
+                    setPreviewLoading(false);
+                    return;
+                }
+            } catch (err) {
+                setAuthError('Network error while verifying passcode. Please try again.');
+                setPreviewLoading(false);
+                return;
+            }
+            setPreviewLoading(false);
+        }
+
+        setShowPreview(true);
     };
 
     return (
@@ -240,7 +289,7 @@ export default function DownloadPortal() {
                                 <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800/60 space-y-1">
                                     <span className="text-[11px] text-slate-500 block uppercase tracking-wider font-semibold">Expires</span>
                                     <span className={`font-medium block ${info.link?.is_expired ? 'text-rose-400' : 'text-slate-200'}`}>
-                                        {formatDate(info.link?.expires_at)}
+                                        {info.link?.expires_at ? formatDate(info.link?.expires_at) : 'No Expiry (Permanent)'}
                                     </span>
                                 </div>
 
@@ -265,9 +314,9 @@ export default function DownloadPortal() {
                                 </div>
                             </div>
 
-                            {/* Download Complete & Auto Close Notification */}
+                            {/* Download Complete Notification */}
                             {downloadComplete && (
-                                <div className="p-4 rounded-xl bg-emerald-950/80 border border-emerald-800 text-emerald-200 text-xs space-y-3 shadow-lg">
+                                <div className="p-4 rounded-xl bg-emerald-950/80 border border-emerald-800/90 text-emerald-200 text-xs space-y-2.5 shadow-lg">
                                     <div className="flex items-center gap-2.5">
                                         <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />
                                         <div>
@@ -275,17 +324,8 @@ export default function DownloadPortal() {
                                             <span>Your file is downloading directly to your device.</span>
                                         </div>
                                     </div>
-                                    <div className="flex items-center justify-between pt-2 border-t border-emerald-900/60 text-[11px] text-emerald-300/90">
-                                        <span>
-                                            {secondsToClose > 0 ? `Closing this tab in ${secondsToClose}s...` : 'Download initiated.'}
-                                        </span>
-                                        <button
-                                            type="button"
-                                            onClick={() => window.close()}
-                                            className="px-3 py-1 bg-emerald-900 hover:bg-emerald-800 text-white rounded-lg font-semibold transition"
-                                        >
-                                            Close Window Now
-                                        </button>
+                                    <div className="pt-2 border-t border-emerald-900/60 text-[11px] text-emerald-300/80 flex items-center justify-between">
+                                        <span>Download is underway. You can now close this tab (<kbd className="px-1.5 py-0.5 bg-emerald-900/80 border border-emerald-700/60 rounded text-[10px] font-mono text-emerald-200">Ctrl + W</kbd> or <kbd className="px-1.5 py-0.5 bg-emerald-900/80 border border-emerald-700/60 rounded text-[10px] font-mono text-emerald-200">⌘ + W</kbd>).</span>
                                     </div>
                                 </div>
                             )}
@@ -316,20 +356,100 @@ export default function DownloadPortal() {
                                         </div>
                                     )}
 
-                                    <button
-                                        type="submit"
-                                        disabled={downloading}
-                                        className="w-full py-3.5 px-4 bg-gradient-to-r from-cyan-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 text-white rounded-xl text-sm font-bold shadow-lg shadow-cyan-500/20 flex items-center justify-center gap-2 transition disabled:opacity-50"
-                                    >
-                                        <Download className="w-4 h-4" />
-                                        {downloading ? 'Preparing Download...' : (downloadComplete ? 'Download Again' : 'Download Secure File')}
-                                    </button>
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                                        <button
+                                            type="button"
+                                            onClick={handleOpenPreview}
+                                            disabled={downloading || previewLoading}
+                                            className="py-3 px-4 bg-slate-800 hover:bg-slate-700 border border-slate-700/80 text-white rounded-xl text-sm font-semibold flex items-center justify-center gap-2 transition disabled:opacity-50"
+                                        >
+                                            <Eye className="w-4 h-4 text-cyan-400" />
+                                            {previewLoading ? 'Verifying...' : 'Stream / Preview'}
+                                        </button>
+                                        <button
+                                            type="submit"
+                                            disabled={downloading || previewLoading}
+                                            className="py-3 px-4 bg-gradient-to-r from-cyan-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 text-white rounded-xl text-sm font-bold shadow-lg shadow-cyan-500/20 flex items-center justify-center gap-2 transition disabled:opacity-50"
+                                        >
+                                            <Download className="w-4 h-4" />
+                                            {downloading ? 'Preparing...' : (downloadComplete ? 'Download Again' : 'Download File')}
+                                        </button>
+                                    </div>
                                 </form>
                             )}
                         </div>
                     )}
                 </div>
             </main>
+
+            {/* Modal Preview Dialog */}
+            {showPreview && (
+                <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-md flex flex-col p-4 sm:p-6 animate-in fade-in duration-200">
+                    <div className="flex items-center justify-between pb-4 border-b border-slate-800">
+                        <div className="flex items-center gap-3">
+                            <div className="w-9 h-9 rounded-lg bg-cyan-950/80 border border-cyan-800 text-cyan-400 flex items-center justify-center shrink-0">
+                                <FileText className="w-5 h-5" />
+                            </div>
+                            <div>
+                                <h3 className="font-bold text-white text-sm sm:text-base truncate max-w-md">
+                                    {info?.file?.original_filename}
+                                </h3>
+                                <p className="text-xs text-slate-400">
+                                    {info?.file?.mime_type} • {formatBytes(info?.file?.size_bytes)}
+                                </p>
+                            </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <a
+                                href={getInlineViewUrl(password)}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 border border-slate-700"
+                            >
+                                <ExternalLink className="w-3.5 h-3.5" />
+                                Open in New Tab
+                            </a>
+                            <button
+                                onClick={() => setShowPreview(false)}
+                                className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white rounded-lg border border-slate-700 transition"
+                            >
+                                <X className="w-5 h-5" />
+                            </button>
+                        </div>
+                    </div>
+
+                    <div className="flex-1 mt-4 rounded-xl border border-slate-800 bg-slate-900/60 overflow-hidden flex items-center justify-center relative">
+                        {info?.file?.mime_type?.startsWith('image/') ? (
+                            <img
+                                src={getInlineViewUrl(password)}
+                                alt={info?.file?.original_filename}
+                                className="max-h-full max-w-full object-contain mx-auto"
+                            />
+                        ) : info?.file?.mime_type?.startsWith('video/') ? (
+                            <video
+                                controls
+                                autoPlay
+                                className="max-h-full max-w-full mx-auto"
+                                src={getInlineViewUrl(password)}
+                            >
+                                Your browser does not support HTML5 video preview.
+                            </video>
+                        ) : info?.file?.mime_type?.startsWith('audio/') ? (
+                            <div className="p-8 text-center space-y-4">
+                                <audio controls autoPlay className="w-full max-w-md mx-auto" src={getInlineViewUrl(password)}>
+                                    Your browser does not support HTML5 audio.
+                                </audio>
+                            </div>
+                        ) : (
+                            <iframe
+                                src={getInlineViewUrl(password)}
+                                title={info?.file?.original_filename}
+                                className="w-full h-full border-0 bg-white"
+                            />
+                        )}
+                    </div>
+                </div>
+            )}
 
             {/* Footer */}
             <footer className="border-t border-slate-900 bg-slate-950 py-4 text-center text-xs text-slate-500">

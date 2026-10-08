@@ -1,11 +1,31 @@
 <?php
 
+use App\Http\Controllers\AuthController;
 use App\Http\Controllers\ManagementController;
+use App\Http\Controllers\PortalDownloadController;
+use App\Http\Controllers\UserController;
 use Illuminate\Support\Facades\Route;
 
-// Management API Routes
-Route::prefix('api/management')->group(function () {
+// Public Short Portal Routes (/d/{token})
+Route::get('/d/{token}', [PortalDownloadController::class, 'show'])->name('portal.download');
+Route::get('/d/{token}/info', [PortalDownloadController::class, 'info'])->name('portal.download.info');
+
+// Auth Routes (Session / Web)
+Route::prefix('api/auth')->group(function () {
+    Route::post('/login', [AuthController::class, 'login']);
+    Route::post('/logout', [AuthController::class, 'logout']);
+    Route::get('/me', [AuthController::class, 'me']);
+});
+
+// Management API Routes (Protected by Auth)
+Route::prefix('api/management')->middleware('auth')->group(function () {
     Route::get('/stats', [ManagementController::class, 'stats']);
+
+    // User Management
+    Route::get('/users', [UserController::class, 'index']);
+    Route::post('/users', [UserController::class, 'store']);
+    Route::put('/users/{id}', [UserController::class, 'update']);
+    Route::delete('/users/{id}', [UserController::class, 'destroy']);
 
     // Connected Systems
     Route::get('/systems', [ManagementController::class, 'getSystems']);

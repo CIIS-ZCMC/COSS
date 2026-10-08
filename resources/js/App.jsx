@@ -11,16 +11,25 @@ import {
     ExternalLink,
     Zap,
     Lock,
-    Link as LinkIcon
+    Link as LinkIcon,
+    BookOpen,
+    Users,
+    LogOut,
+    User as UserIcon,
+    Shield
 } from 'lucide-react';
 import SystemsManagement from './components/SystemsManagement';
 import LinksManagement from './components/LinksManagement';
 import QuarantineAndExpiredManagement from './components/QuarantineAndExpiredManagement';
+import UsersManagement from './components/UsersManagement';
+import LoginPage from './components/LoginPage';
 import { fetchJson, formatBytes } from './api';
 
 
 export default function App() {
-    const [activeTab, setActiveTab] = useState('systems'); // 'systems', 'quarantine'
+    const [currentUser, setCurrentUser] = useState(null);
+    const [checkingAuth, setCheckingAuth] = useState(true);
+    const [activeTab, setActiveTab] = useState('systems'); // 'systems', 'links', 'quarantine', 'users'
     const [stats, setStats] = useState({
         total_systems: 0,
         active_systems: 0,
@@ -31,21 +40,72 @@ export default function App() {
     });
     const [loadingStats, setLoadingStats] = useState(true);
 
+    const checkAuth = async () => {
+        try {
+            setCheckingAuth(true);
+            const data = await fetchJson('/api/auth/me');
+            if (data?.user) {
+                setCurrentUser(data.user);
+            } else {
+                setCurrentUser(null);
+            }
+        } catch (err) {
+            setCurrentUser(null);
+        } finally {
+            setCheckingAuth(false);
+        }
+    };
+
+    const handleLogout = async () => {
+        try {
+            await fetchJson('/api/auth/logout', { method: 'POST' });
+        } catch (e) {
+            console.error('Logout error:', e);
+        } finally {
+            setCurrentUser(null);
+        }
+    };
+
     const loadStats = async () => {
+        if (!currentUser) return;
         try {
             setLoadingStats(true);
             const data = await fetchJson('/api/management/stats');
             setStats(data);
         } catch (err) {
             console.error('Failed to load stats:', err);
+            if (err?.message?.includes('Unauthenticated') || err?.message?.includes('401')) {
+                setCurrentUser(null);
+            }
         } finally {
             setLoadingStats(false);
         }
     };
 
     useEffect(() => {
-        loadStats();
+        checkAuth();
     }, []);
+
+    useEffect(() => {
+        if (currentUser) {
+            loadStats();
+        }
+    }, [currentUser]);
+
+    if (checkingAuth) {
+        return (
+            <div className="min-h-screen bg-slate-950 text-slate-400 flex items-center justify-center font-sans">
+                <div className="flex flex-col items-center gap-3">
+                    <RefreshCw className="w-6 h-6 animate-spin text-cyan-400" />
+                    <span className="text-xs font-medium">Verifying COSS security session...</span>
+                </div>
+            </div>
+        );
+    }
+
+    if (!currentUser) {
+        return <LoginPage onLoginSuccess={(user) => setCurrentUser(user)} />;
+    }
 
     return (
         <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
@@ -66,7 +126,19 @@ export default function App() {
                     </div>
 
                     <div className="flex items-center gap-3">
-                        <div className="hidden sm:flex items-center gap-2 px-3 py-1 bg-slate-900 border border-slate-800 rounded-full text-xs text-slate-300">
+                        <button
+                            onClick={() => {
+                                window.history.pushState({}, '', '/docs');
+                                window.dispatchEvent(new PopStateEvent('popstate'));
+                                window.location.href = '/docs';
+                            }}
+                            className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold bg-indigo-600/20 text-indigo-400 border border-indigo-500/30 hover:bg-indigo-600 hover:text-white transition shadow-sm"
+                            title="Open Documentation & Swagger Specifications page"
+                        >
+                            <BookOpen className="w-4 h-4" />
+                            <span className="hidden sm:inline">Documentation</span>
+                        </button>
+                        <div className="hidden lg:flex items-center gap-2 px-3 py-1 bg-slate-900 border border-slate-800 rounded-full text-xs text-slate-300">
                             <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
                             <span>ClamAV Engine: Ready</span>
                         </div>
@@ -77,6 +149,31 @@ export default function App() {
                         >
                             <RefreshCw className={`w-4 h-4 ${loadingStats ? 'animate-spin' : ''}`} />
                         </button>
+
+                        {/* User Profile Badge & Logout */}
+                        <div className="flex items-center gap-2 pl-2 border-l border-slate-800">
+                            <div className="flex items-center gap-2 px-2.5 py-1 rounded-xl bg-slate-900 border border-slate-800 text-xs">
+                                <div className="w-6 h-6 rounded-full bg-gradient-to-tr from-cyan-600 to-indigo-600 flex items-center justify-center text-[10px] font-bold text-white uppercase">
+                                    {(currentUser.username || currentUser.name || 'U').charAt(0)}
+                                </div>
+                                <div className="hidden sm:block text-left">
+                                    <div className="font-semibold text-slate-200 leading-tight">
+                                        {currentUser.username || currentUser.name}
+                                    </div>
+                                    <div className="text-[10px] text-cyan-400 capitalize flex items-center gap-1">
+                                        <Shield className="w-2.5 h-2.5" />
+                                        {currentUser.role || 'admin'}
+                                    </div>
+                                </div>
+                            </div>
+                            <button
+                                onClick={handleLogout}
+                                className="p-2 text-slate-400 hover:text-rose-400 bg-slate-900 border border-slate-800 hover:border-rose-900/50 rounded-lg transition"
+                                title="Sign out from COSS console"
+                            >
+                                <LogOut className="w-4 h-4" />
+                            </button>
+                        </div>
                     </div>
                 </div>
             </header>
@@ -185,6 +282,28 @@ export default function App() {
                         <ShieldAlert className="w-4 h-4" />
                         Quarantined & Expired Files ({stats.quarantined_files + stats.expired_files})
                     </button>
+                    <button
+                        onClick={() => setActiveTab('users')}
+                        className={`pb-3 text-sm font-semibold flex items-center gap-2 border-b-2 transition ${
+                            activeTab === 'users'
+                                ? 'border-indigo-500 text-indigo-400'
+                                : 'border-transparent text-slate-400 hover:text-slate-200'
+                        }`}
+                    >
+                        <Users className="w-4 h-4" />
+                        User Management
+                    </button>
+                    <button
+                        onClick={() => {
+                            window.location.href = '/docs';
+                        }}
+                        className="pb-3 text-sm font-semibold flex items-center gap-2 border-b-2 border-transparent text-slate-400 hover:text-indigo-400 transition"
+                        title="Open Documentation & Swagger Spec in dedicated page"
+                    >
+                        <BookOpen className="w-4 h-4 text-indigo-400" />
+                        <span>Documentation</span>
+                        <ExternalLink className="w-3 h-3 text-slate-500" />
+                    </button>
                 </div>
 
                 {/* View Switch */}
@@ -196,6 +315,9 @@ export default function App() {
                 )}
                 {activeTab === 'quarantine' && (
                     <QuarantineAndExpiredManagement onRefreshStats={loadStats} />
+                )}
+                {activeTab === 'users' && (
+                    <UsersManagement currentUser={currentUser} />
                 )}
 
             </main>

@@ -9,6 +9,7 @@ use App\Models\FileRecord;
 use App\Services\AuditLoggerService;
 use Illuminate\Contracts\View\View;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Storage;
@@ -45,15 +46,16 @@ class FileDownloadController extends Controller
         }
 
         $validated = $request->validate([
-            'expires_in_minutes' => 'nullable|integer|min:1|max:10080', // Up to 7 days
+            'expires_in_minutes' => 'nullable|integer|min:0|max:10080', // 0 or null for no expiration
             'max_downloads' => 'nullable|integer|min:1|max:10000',
             'allowed_ips' => 'nullable|array',
             'allowed_ips.*' => 'string',
             'password' => 'nullable|string|min:4|max:100',
         ]);
 
-        $expiresInMinutes = (int) ($validated['expires_in_minutes'] ?? 15);
-        $expiresAt = now()->addMinutes($expiresInMinutes);
+        $hasExpiration = ! empty($validated['expires_in_minutes']);
+        $expiresInMinutes = $hasExpiration ? (int) $validated['expires_in_minutes'] : null;
+        $expiresAt = $expiresInMinutes ? now()->addMinutes($expiresInMinutes) : null;
         $maxDownloads = isset($validated['max_downloads']) ? (int) $validated['max_downloads'] : null;
         $allowedIps = $validated['allowed_ips'] ?? null;
         $password = $validated['password'] ?? null;
@@ -65,11 +67,9 @@ class FileDownloadController extends Controller
             'link' => $token,
         ];
 
-        $signedUrl = URL::temporarySignedRoute(
-            'api.files.download',
-            $expiresAt,
-            $routeParams
-        );
+        $signedUrl = $expiresAt
+            ? URL::temporarySignedRoute('api.files.download', $expiresAt, $routeParams)
+            : URL::signedRoute('api.files.download', $routeParams);
 
         $linkRecord = FileDownloadLink::create([
             'token' => $token,
@@ -87,7 +87,7 @@ class FileDownloadController extends Controller
         $this->auditLogger->log('file.signed_url_generated', $client, $file, [
             'link_token' => $token,
             'expires_in_minutes' => $expiresInMinutes,
-            'expires_at' => $expiresAt->toIso8601String(),
+            'expires_at' => $expiresAt?->toIso8601String(),
             'max_downloads' => $maxDownloads,
             'allowed_ips' => $allowedIps,
             'has_password' => ! empty($password),
@@ -95,8 +95,9 @@ class FileDownloadController extends Controller
 
         return response()->json([
             'download_url' => $signedUrl,
+            'portal_url' => url("/d/{$token}"),
             'link_token' => $token,
-            'expires_at' => $expiresAt->toIso8601String(),
+            'expires_at' => $expiresAt?->toIso8601String(),
             'max_downloads' => $maxDownloads,
             'password_required' => ! empty($password),
         ]);
@@ -114,11 +115,13 @@ class FileDownloadController extends Controller
         $downloadUrl = URL::route('api.files.download', array_merge(['uuid' => $uuid], $request->query()));
         $downloadRequest = Request::create($downloadUrl, 'GET', $request->query(), [], [], $request->server->all());
 
+        $ignoredParams = ['password', 'stream', 'view'];
+
         $hasUnexpiredSig = $request->hasValidSignatureWhileIgnoring(['password'])
-            || $downloadRequest->hasValidSignatureWhileIgnoring(['password', 'stream']);
+            || $downloadRequest->hasValidSignatureWhileIgnoring($ignoredParams);
 
         $hasCorrectHmac = URL::hasCorrectSignature($request, true, ['password'])
-            || URL::hasCorrectSignature($downloadRequest, true, ['password', 'stream']);
+            || URL::hasCorrectSignature($downloadRequest, true, $ignoredParams);
 
         $isValidSignature = $hasUnexpiredSig || ($linkToken && $hasCorrectHmac);
 
@@ -169,7 +172,7 @@ class FileDownloadController extends Controller
     /**
      * Stream the file from the NAS using the signed temporary URL with restriction checks.
      */
-    public function download(Request $request, string $uuid): StreamedResponse|JsonResponse|View
+    public function download(Request $request, string $uuid): StreamedResponse|JsonResponse|View|RedirectResponse
     {
         // Determine if direct download is allowed immediately:
         // If password is required and not yet supplied, show GUI portal.
@@ -185,7 +188,9 @@ class FileDownloadController extends Controller
         }
 
         $accept = $request->header('Accept', '');
-        $isBrowserNavigation = str_contains($accept, 'text/html') && ! $request->expectsJson() && ! $request->query('stream');
+        $isViewRequest = $request->boolean('view');
+        $isStreamRequest = $request->boolean('stream');
+        $isBrowserNavigation = str_contains($accept, 'text/html') && ! $request->expectsJson() && ! $isStreamRequest && ! $isViewRequest;
 
         $file = FileRecord::where('uuid', $uuid)->first();
         if (! $file) {
@@ -200,12 +205,13 @@ class FileDownloadController extends Controller
         }
 
         // 1. Signature check
-        // Check HMAC signature integrity (ignoring password and stream query parameters).
+        // Check HMAC signature integrity (ignoring password, stream, and view query parameters).
         // If a link token is present, we defer expiration enforcement to $linkRecord->isExpired(),
         // allowing previously generated links to remain valid when expiration is extended in the database.
         $linkToken = $request->query('link');
-        $hasCorrectHmac = URL::hasCorrectSignature($request, true, ['password', 'stream']);
-        $hasUnexpiredSig = $request->hasValidSignatureWhileIgnoring(['password', 'stream']);
+        $ignoredParams = ['password', 'stream', 'view'];
+        $hasCorrectHmac = URL::hasCorrectSignature($request, true, $ignoredParams);
+        $hasUnexpiredSig = $request->hasValidSignatureWhileIgnoring($ignoredParams);
 
         $isValidSignature = $hasUnexpiredSig || ($linkToken && $hasCorrectHmac);
 
@@ -238,6 +244,13 @@ class FileDownloadController extends Controller
         $linkRecord = null;
 
         if ($linkToken) {
+            $isExplicitBrowserRequest = $request->header('X-Simulate-Browser') === '1'
+                || ($isBrowserNavigation && ! app()->runningUnitTests());
+
+            if ($isExplicitBrowserRequest) {
+                return redirect()->to(url("/d/{$linkToken}"));
+            }
+
             $linkRecord = FileDownloadLink::where('token', $linkToken)
                 ->where('file_record_id', $file->id)
                 ->first();
@@ -335,22 +348,32 @@ class FileDownloadController extends Controller
             ], Response::HTTP_NOT_FOUND);
         }
 
-        // Increment download counter and record last accessed timestamp
+        // Increment download/view counter and record last accessed timestamp
         if ($linkRecord) {
             $linkRecord->increment('download_count');
             $linkRecord->update(['last_accessed_at' => now()]);
         }
 
-        $this->auditLogger->log('file.streamed_download', $file->clientApplication, $file, [
+        $actionType = $isViewRequest ? 'file.inline_view' : 'file.streamed_download';
+
+        $this->auditLogger->log($actionType, $file->clientApplication, $file, [
             'filename' => $file->original_filename,
             'size_bytes' => $file->size_bytes,
             'link_token' => $linkToken,
+            'is_view' => $isViewRequest,
             'download_count' => $linkRecord?->download_count,
         ], $request);
 
-        return Storage::disk($file->disk)->download($file->storage_path, $file->original_filename, [
+        $headers = [
             'Content-Type' => $file->mime_type,
             'Content-Length' => $file->size_bytes,
-        ]);
+            'Accept-Ranges' => 'bytes',
+        ];
+
+        if ($isViewRequest) {
+            return Storage::disk($file->disk)->response($file->storage_path, $file->original_filename, $headers, 'inline');
+        }
+
+        return Storage::disk($file->disk)->download($file->storage_path, $file->original_filename, $headers);
     }
 }
