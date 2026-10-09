@@ -299,7 +299,7 @@ class ManagementController extends Controller
         $sourceDisk = Storage::disk($file->disk ?: 'staging');
         $targetDisk = Storage::disk('nas');
 
-        $cleanPath = 'clean/'.($file->clientApplication?->uuid ?? 'shared').'/'.$file->stored_filename;
+        $cleanPath = 'clean/'.($file->clientApplication ? $file->clientApplication->getStorageFolder() : 'shared').'/'.$file->stored_filename;
 
         if ($sourceDisk->exists($file->storage_path)) {
             $stream = $sourceDisk->readStream($file->storage_path);
@@ -366,12 +366,21 @@ class ManagementController extends Controller
     public function getDownloadLinks(Request $request): JsonResponse
     {
         $status = $request->query('status', 'all'); // 'all', 'active', 'expired', 'revoked'
+        $systemId = $request->query('system_id');
         $search = $request->query('search');
 
         $query = FileDownloadLink::with([
             'fileRecord:id,uuid,original_filename,size_bytes,mime_type,status',
             'clientApplication:id,name,uuid',
         ]);
+
+        if ($systemId !== null && $systemId !== '' && $systemId !== 'all') {
+            if ($systemId === 'direct' || $systemId === 'dashboard' || $systemId === 'none') {
+                $query->whereNull('client_application_id');
+            } else {
+                $query->where('client_application_id', (int) $systemId);
+            }
+        }
 
         if ($status === 'active') {
             $query->where('is_revoked', false)->where('expires_at', '>', now());

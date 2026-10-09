@@ -30,12 +30,11 @@ class PortalDownloadController extends Controller
         $isStreamRequest = $request->boolean('stream');
         $isBrowserNavigation = str_contains($accept, 'text/html') && ! $request->expectsJson() && ! $isStreamRequest && ! $isViewRequest;
 
-        // If it's standard browser navigation and not requesting direct stream/view, render portal UI
-        if ($isBrowserNavigation) {
-            return view('app');
-        }
-
         if (! $linkRecord || ! $linkRecord->fileRecord) {
+            if ($isBrowserNavigation) {
+                return view('app');
+            }
+
             return response()->json([
                 'error' => 'LinkNotFound',
                 'message' => 'The download link token is invalid or has expired.',
@@ -43,6 +42,21 @@ class PortalDownloadController extends Controller
         }
 
         $file = $linkRecord->fileRecord;
+
+        $clientIp = $request->ip();
+        $isBlocked = $file->status !== 'clean'
+            || $linkRecord->is_revoked
+            || $linkRecord->isExpired()
+            || $linkRecord->hasReachedDownloadLimit()
+            || ! $linkRecord->isIpAuthorized($clientIp);
+
+        $requiresPassword = ! empty($linkRecord->password_hash);
+
+        // If it's a browser navigation and there are restrictions/errors or password required, show GUI portal.
+        // Otherwise, if there is no expiration, revocation, password, or restriction and it is fully allowed, stream directly!
+        if ($isBrowserNavigation && ($isBlocked || $requiresPassword)) {
+            return view('app');
+        }
 
         // 1. File status check
         if ($file->status !== 'clean') {

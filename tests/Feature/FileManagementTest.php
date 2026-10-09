@@ -12,6 +12,7 @@ use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 use Tests\TestCase;
 
 class FileManagementTest extends TestCase
@@ -75,6 +76,9 @@ class FileManagementTest extends TestCase
             ->assertJsonPath('file.status', 'pending_scan');
 
         $fileUuid = $response->json('file.uuid');
+
+        $record = FileRecord::where('uuid', $fileUuid)->firstOrFail();
+        $this->assertStringStartsWith('uploads/internal-hospital-ehr-client/', $record->storage_path);
 
         $this->assertDatabaseHas('file_records', [
             'uuid' => $fileUuid,
@@ -302,6 +306,21 @@ class FileManagementTest extends TestCase
             'X-API-Secret' => 'other-secret',
         ])->getJson("/api/v1/files/{$fileRecord->uuid}");
 
-        $response->assertStatus(404);
+        $response->assertStatus(404)
+            ->assertJsonPath('error', 'NotFound');
+    }
+
+    public function test_non_existent_or_external_file_returns_clean_404_json(): void
+    {
+        $nonExistentUuid = (string) Str::uuid();
+
+        $response = $this->withHeaders($this->authHeaders())
+            ->getJson("/api/v1/files/{$nonExistentUuid}");
+
+        $response->assertStatus(404)
+            ->assertJson([
+                'error' => 'NotFound',
+                'message' => 'The requested record could not be found in this system.',
+            ]);
     }
 }

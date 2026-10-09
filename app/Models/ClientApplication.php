@@ -75,4 +75,14 @@ class ClientApplication extends Model
     {
         return $this->hasMany(FileDownloadLink::class);
     }
+
+    /**
+     * Get filesystem-friendly folder name based on system name.
+     */
+    public function getStorageFolder(): string
+    {
+        $slug = Str::slug($this->name);
+
+        return ! empty($slug) ? $slug : $this->uuid;
+    }
 }

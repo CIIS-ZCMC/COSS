@@ -197,25 +197,39 @@ export default function DownloadPortal() {
                         </div>
                     ) : error ? (
                         <div className="bg-slate-900/90 border border-rose-900/60 rounded-2xl p-8 text-center space-y-4 shadow-2xl">
-                            <div className="w-14 h-14 rounded-2xl bg-rose-950/80 border border-rose-800 text-rose-400 flex items-center justify-center mx-auto">
+                            <div className="w-14 h-14 rounded-2xl bg-rose-950/80 border border-rose-800 text-rose-400 flex items-center justify-center mx-auto shadow-lg shadow-rose-950/50">
                                 <ShieldAlert className="w-7 h-7" />
                             </div>
                             <div>
-                                <h3 className="font-bold text-lg text-white">Download Unavailable</h3>
-                                <p className="text-xs text-rose-400 mt-1">{error}</p>
+                                <h3 className="font-bold text-lg text-white">Record / File Not Found</h3>
+                                <p className="text-xs text-rose-300 font-medium mt-1">{error}</p>
                             </div>
-                            <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 text-xs text-slate-400 text-left space-y-1">
-                                <div>• This signed URL may have expired or already passed its maximum allowed download count.</div>
-                                <div>• The link may have been revoked by an administrator.</div>
-                                <div>• Please contact the transmitting department to generate a fresh link.</div>
+                            <div className="p-4 bg-slate-950/80 rounded-xl border border-slate-800 text-xs text-slate-300 text-left space-y-2">
+                                <div className="font-semibold text-slate-200 flex items-center gap-1.5">
+                                    <AlertCircle className="w-3.5 h-3.5 text-amber-400" />
+                                    Why is this happening?
+                                </div>
+                                <div className="space-y-1.5 text-slate-400 text-[11px] leading-relaxed">
+                                    <div>• <strong className="text-slate-300">External System Record:</strong> This file may belong to another hospital information system or was stored in a separate subsystem.</div>
+                                    <div>• <strong className="text-slate-300">Expired or Purged:</strong> The file or temporary link token may have already been purged or expired according to hospital retention policies.</div>
+                                    <div>• <strong className="text-slate-300">Invalid Identifier:</strong> The requested UUID or link token was not found in COSS.</div>
+                                </div>
                             </div>
-                            <button
-                                onClick={loadLinkInfo}
-                                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-lg text-xs font-semibold inline-flex items-center gap-1.5"
-                            >
-                                <RefreshCw className="w-3.5 h-3.5" />
-                                Retry Check
-                            </button>
+                            <div className="flex items-center justify-center gap-2 pt-1">
+                                <button
+                                    onClick={loadLinkInfo}
+                                    className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 transition-colors"
+                                >
+                                    <RefreshCw className="w-3.5 h-3.5" />
+                                    Retry Check
+                                </button>
+                                <a
+                                    href="/"
+                                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 transition-colors"
+                                >
+                                    Return to Console
+                                </a>
+                            </div>
                         </div>
                     ) : (
                         <div className="bg-slate-900/70 border border-slate-800/90 rounded-2xl p-6 sm:p-8 shadow-2xl space-y-6 backdrop-blur-md">

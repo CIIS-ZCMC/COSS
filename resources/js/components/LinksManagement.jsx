@@ -20,13 +20,20 @@ import {
     Key,
     ShieldAlert,
     Network,
-    Edit2
+    Edit2,
+    Server,
+    Layers,
+    ChevronDown,
+    ChevronUp
 } from 'lucide-react';
 import { fetchJson, formatBytes, formatDate } from '../api';
 
 
 export default function LinksManagement({ onRefreshStats }) {
     const [linksData, setLinksData] = useState({ data: [], current_page: 1, last_page: 1, total: 0 });
+    const [systems, setSystems] = useState([]);
+    const [systemFilter, setSystemFilter] = useState('all'); // 'all', 'direct', or system_id
+    const [groupBySystem, setGroupBySystem] = useState(true);
     const [loading, setLoading] = useState(true);
     const [statusFilter, setStatusFilter] = useState('all'); // 'all', 'active', 'expired', 'revoked'
     const [search, setSearch] = useState('');
@@ -63,6 +70,28 @@ export default function LinksManagement({ onRefreshStats }) {
     const [editSubmitting, setEditSubmitting] = useState(false);
     const [editErrorMessage, setEditErrorMessage] = useState('');
     const [updatedLinkResult, setUpdatedLinkResult] = useState(null);
+
+    const loadSystemsList = async () => {
+        try {
+            const data = await fetchJson('/api/management/systems');
+            setSystems(data.systems || []);
+        } catch (err) {
+            console.error('Failed to load systems for filter:', err);
+        }
+    };
+
+    useEffect(() => {
+        loadSystemsList();
+    }, []);
+
+    const [expandedSystems, setExpandedSystems] = useState({});
+
+    const toggleSystemCollapse = (systemKey) => {
+        setExpandedSystems(prev => ({
+            ...prev,
+            [systemKey]: !prev[systemKey]
+        }));
+    };
 
     const openEditModal = (link) => {
         setEditingLink(link);
@@ -141,6 +170,9 @@ export default function LinksManagement({ onRefreshStats }) {
                 status: statusFilter,
                 page: targetPage.toString(),
             });
+            if (systemFilter && systemFilter !== 'all') {
+                params.append('system_id', systemFilter);
+            }
             if (search) params.append('search', search);
 
             const res = await fetchJson(`/api/management/links?${params.toString()}`);
@@ -155,7 +187,7 @@ export default function LinksManagement({ onRefreshStats }) {
     useEffect(() => {
         setPage(1);
         loadLinks(1);
-    }, [statusFilter, search]);
+    }, [statusFilter, systemFilter, search]);
 
     const handleCopy = (text, token) => {
         if (!text) return;
@@ -309,6 +341,24 @@ export default function LinksManagement({ onRefreshStats }) {
                         />
                     </div>
 
+                    {/* System Filter Dropdown */}
+                    <div className="flex items-center gap-1.5 bg-slate-950 px-2 py-1 rounded-lg border border-slate-800 text-xs">
+                        <Server className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                        <select
+                            value={systemFilter}
+                            onChange={(e) => setSystemFilter(e.target.value)}
+                            className="bg-transparent text-slate-300 text-xs focus:outline-none cursor-pointer pr-1"
+                        >
+                            <option value="all" className="bg-slate-900 text-slate-200">All Systems</option>
+                            <option value="direct" className="bg-slate-900 text-slate-200">Dashboard / Direct Uploads</option>
+                            {systems.map((sys) => (
+                                <option key={sys.id} value={sys.id.toString()} className="bg-slate-900 text-slate-200">
+                                    {sys.name}
+                                </option>
+                            ))}
+                        </select>
+                    </div>
+
                     {/* Filter buttons */}
                     <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-lg border border-slate-800 text-xs">
                         {[
@@ -330,6 +380,21 @@ export default function LinksManagement({ onRefreshStats }) {
                             </button>
                         ))}
                     </div>
+
+                    {/* Segregate by System toggle button */}
+                    <button
+                        onClick={() => setGroupBySystem(!groupBySystem)}
+                        className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-medium transition ${
+                            groupBySystem
+                                ? 'bg-indigo-950/70 border-indigo-700 text-indigo-300 shadow-sm'
+                                : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200'
+                        }`}
+                        title="Toggle grouping and segregating file links by client system"
+                    >
+                        <Layers className="w-3.5 h-3.5 text-indigo-400" />
+                        <span>Segregated by System</span>
+                        <span className={`w-1.5 h-1.5 rounded-full ${groupBySystem ? 'bg-indigo-400' : 'bg-slate-600'}`}></span>
+                    </button>
                 </div>
 
                 <div className="flex items-center gap-2 w-full sm:w-auto">
@@ -395,13 +460,211 @@ export default function LinksManagement({ onRefreshStats }) {
                                             <LinkIcon className="w-6 h-6 text-slate-600" />
                                             <p className="font-medium text-slate-400">No download links found</p>
                                             <p className="text-[11px]">
-                                                {search || statusFilter !== 'all'
-                                                    ? 'Try adjusting your search query or status filter.'
+                                                {search || statusFilter !== 'all' || systemFilter !== 'all'
+                                                    ? 'Try adjusting your search query, status, or system filter.'
                                                     : 'Create a restricted link using the button above or request via API.'}
                                             </p>
                                         </div>
                                     </td>
                                 </tr>
+                            ) : groupBySystem ? (
+                                (() => {
+                                    // Group links by client system
+                                    const grouped = linksData.data.reduce((acc, link) => {
+                                        const sysKey = link.client_application?.id ? String(link.client_application.id) : 'dashboard';
+                                        const sysName = link.client_application?.name || 'Dashboard / Direct Uploads';
+                                        if (!acc[sysKey]) {
+                                            acc[sysKey] = {
+                                                key: sysKey,
+                                                name: sysName,
+                                                system: link.client_application,
+                                                links: [],
+                                            };
+                                        }
+                                        acc[sysKey].links.push(link);
+                                        return acc;
+                                    }, {});
+
+                                    const groups = Object.values(grouped);
+
+                                    return groups.map((group) => {
+                                        const isExpanded = Boolean(expandedSystems[group.key]);
+                                        const activeCount = group.links.filter(l => !l.is_revoked && !l.is_expired).length;
+
+                                        return (
+                                            <React.Fragment key={group.key}>
+                                                {/* System Group Header Row */}
+                                                <tr className="bg-slate-950/90 border-t border-b border-cyan-900/40 select-none">
+                                                    <td colSpan="6" className="py-2.5 px-4">
+                                                        <div 
+                                                            className="flex items-center justify-between cursor-pointer group"
+                                                            onClick={() => toggleSystemCollapse(group.key)}
+                                                        >
+                                                            <div className="flex items-center gap-2.5">
+                                                                <button
+                                                                    type="button"
+                                                                    className="p-1 rounded bg-slate-900 text-slate-400 group-hover:text-cyan-300 border border-slate-800 transition"
+                                                                >
+                                                                    {isExpanded ? (
+                                                                        <ChevronDown className="w-3.5 h-3.5" />
+                                                                    ) : (
+                                                                        <ChevronRight className="w-3.5 h-3.5" />
+                                                                    )}
+                                                                </button>
+                                                                <div className="flex items-center gap-2">
+                                                                    <div className="p-1.5 rounded-md bg-cyan-950/80 border border-cyan-800/80 text-cyan-400">
+                                                                        <Server className="w-3.5 h-3.5" />
+                                                                    </div>
+                                                                    <span className="font-bold text-sm text-slate-100 tracking-wide group-hover:text-cyan-300 transition">
+                                                                        {group.name}
+                                                                    </span>
+                                                                </div>
+                                                                <div className="flex items-center gap-1.5 ml-2">
+                                                                    <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-slate-900 text-slate-300 border border-slate-800">
+                                                                        {group.links.length} {group.links.length === 1 ? 'file' : 'files'}
+                                                                    </span>
+                                                                    <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-950/80 text-emerald-400 border border-emerald-800">
+                                                                        {activeCount} active
+                                                                    </span>
+                                                                </div>
+                                                            </div>
+                                                            <span className="text-[11px] text-slate-500 group-hover:text-slate-400 transition">
+                                                                {isExpanded ? 'Click to collapse' : 'Click to expand'}
+                                                            </span>
+                                                        </div>
+                                                    </td>
+                                                </tr>
+
+                                                {/* Group links rows */}
+                                                {isExpanded && group.links.map((link) => (
+                                                    <tr key={link.id} className="hover:bg-slate-800/30 transition border-b border-slate-800/40">
+                                                        {/* File & System */}
+                                                        <td className="py-3.5 px-4 pl-8">
+                                                            <div className="flex items-center gap-2.5">
+                                                                <div className="p-2 rounded-lg bg-slate-950 border border-slate-800 text-cyan-400">
+                                                                    <FileText className="w-4 h-4" />
+                                                                </div>
+                                                                <div>
+                                                                    <div className="font-semibold text-slate-100 flex items-center gap-1.5">
+                                                                        <span>{link.file_record?.original_filename || 'Unknown File'}</span>
+                                                                        {link.file_record?.size_bytes && (
+                                                                            <span className="text-[10px] text-slate-500 font-mono">
+                                                                                ({formatBytes(link.file_record.size_bytes)})
+                                                                            </span>
+                                                                        )}
+                                                                    </div>
+                                                                    <div className="flex items-center gap-2 text-[11px] text-slate-500 mt-0.5">
+                                                                        <span>System: <strong className="text-cyan-400 font-medium">{link.client_application?.name || 'Dashboard'}</strong></span>
+                                                                        <span>•</span>
+                                                                        <span className="font-mono text-[10px] text-slate-600">Token: {link.token.slice(0, 8)}...</span>
+                                                                    </div>
+                                                                </div>
+                                                            </div>
+                                                        </td>
+
+                                                        {/* Status */}
+                                                        <td className="py-3.5 px-4">
+                                                            {getLinkStatusBadge(link)}
+                                                        </td>
+
+                                                        {/* Restrictions */}
+                                                        <td className="py-3.5 px-4">
+                                                            <div className="flex flex-col gap-1 text-[11px]">
+                                                                <div className="flex items-center gap-1.5">
+                                                                    <Lock className={`w-3.5 h-3.5 ${link.has_password ? 'text-amber-400' : 'text-slate-600'}`} />
+                                                                    <span>{link.has_password ? <span className="text-amber-300 font-medium">Password Protected</span> : <span className="text-slate-500">No Password</span>}</span>
+                                                                </div>
+                                                                <div className="flex items-center gap-1.5">
+                                                                    <Network className={`w-3.5 h-3.5 ${link.allowed_ips?.length ? 'text-cyan-400' : 'text-slate-600'}`} />
+                                                                    <span>
+                                                                        {link.allowed_ips?.length ? (
+                                                                            <span className="text-cyan-300 font-mono text-[10px]" title={link.allowed_ips.join(', ')}>
+                                                                                IP Restricted ({link.allowed_ips.length})
+                                                                            </span>
+                                                                        ) : (
+                                                                            <span className="text-slate-500">Any IP</span>
+                                                                        )}
+                                                                    </span>
+                                                                </div>
+                                                            </div>
+                                                        </td>
+
+                                                        {/* Usage / Limits */}
+                                                        <td className="py-3.5 px-4 font-mono text-xs">
+                                                            <div>
+                                                                <span className="text-white font-semibold">{link.download_count}</span>
+                                                                <span className="text-slate-500">
+                                                                    {link.max_downloads ? ` / ${link.max_downloads} max` : ' downloads (unlimited)'}
+                                                                </span>
+                                                            </div>
+                                                            {link.last_accessed_at && (
+                                                                <div className="text-[10px] text-slate-500 mt-0.5">
+                                                                    Last used: {formatDate(link.last_accessed_at)}
+                                                                </div>
+                                                            )}
+                                                        </td>
+
+                                                        {/* Expires */}
+                                                        <td className="py-3.5 px-4 text-[11px]">
+                                                            {link.expires_at ? (
+                                                                <div className={link.is_expired ? 'text-rose-400 font-semibold' : 'text-slate-300'}>
+                                                                    {formatDate(link.expires_at)}
+                                                                </div>
+                                                            ) : (
+                                                                <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-cyan-950/80 text-cyan-400 border border-cyan-800">
+                                                                    No Expiry (Permanent)
+                                                                </span>
+                                                            )}
+                                                        </td>
+
+                                                        {/* Actions */}
+                                                        <td className="py-3.5 px-4 text-right">
+                                                            <div className="flex items-center justify-end gap-1.5">
+                                                                {(link.portal_url || link.download_url) && (
+                                                                    <button
+                                                                        onClick={() => handleCopy(link.portal_url || link.download_url, link.token)}
+                                                                        className="p-1.5 text-slate-400 hover:text-cyan-300 bg-slate-950 border border-slate-800 hover:border-slate-700 rounded-md transition"
+                                                                        title="Copy Short Portal URL (/d/{token})"
+                                                                    >
+                                                                        {copiedToken === link.token ? (
+                                                                            <Check className="w-3.5 h-3.5 text-emerald-400" />
+                                                                        ) : (
+                                                                            <Copy className="w-3.5 h-3.5" />
+                                                                        )}
+                                                                    </button>
+                                                                )}
+
+                                                                <button
+                                                                    onClick={() => openEditModal(link)}
+                                                                    className="p-1.5 text-slate-400 hover:text-cyan-400 bg-slate-950 border border-slate-800 hover:border-slate-700 rounded-md transition"
+                                                                    title="Edit Restrictions & Expiration"
+                                                                >
+                                                                    <Edit2 className="w-3.5 h-3.5" />
+                                                                </button>
+
+                                                                <button
+                                                                    onClick={() => handleToggleRevoke(link)}
+                                                                    disabled={actionLoading[link.token]}
+                                                                    className={`px-2.5 py-1 text-xs rounded-md border font-medium transition ${
+                                                                        link.is_revoked
+                                                                            ? 'bg-emerald-950/60 border-emerald-800 text-emerald-300 hover:bg-emerald-900/60'
+                                                                            : 'bg-rose-950/60 border-rose-800 text-rose-300 hover:bg-rose-900/60'
+                                                                    }`}
+                                                                >
+                                                                    {actionLoading[link.token]
+                                                                        ? 'Updating...'
+                                                                        : link.is_revoked
+                                                                        ? 'Re-activate'
+                                                                        : 'Revoke'}
+                                                                </button>
+                                                            </div>
+                                                        </td>
+                                                    </tr>
+                                                ))}
+                                            </React.Fragment>
+                                        );
+                                    });
+                                })()
                             ) : (
                                 linksData.data.map((link) => (
                                     <tr key={link.id} className="hover:bg-slate-800/30 transition">
@@ -415,13 +678,13 @@ export default function LinksManagement({ onRefreshStats }) {
                                                     <div className="font-semibold text-slate-100 flex items-center gap-1.5">
                                                         <span>{link.file_record?.original_filename || 'Unknown File'}</span>
                                                         {link.file_record?.size_bytes && (
-                                                            <span className="text-[10px] text-slate-500 font-mono">
+                                                             <span className="text-[10px] text-slate-500 font-mono">
                                                                 ({formatBytes(link.file_record.size_bytes)})
                                                             </span>
                                                         )}
                                                     </div>
                                                     <div className="flex items-center gap-2 text-[11px] text-slate-500 mt-0.5">
-                                                        <span>System: <strong className="text-slate-400">{link.client_application?.name || 'Dashboard'}</strong></span>
+                                                        <span>System: <strong className="text-cyan-400 font-medium">{link.client_application?.name || 'Dashboard'}</strong></span>
                                                         <span>•</span>
                                                         <span className="font-mono text-[10px] text-slate-600">Token: {link.token.slice(0, 8)}...</span>
                                                     </div>

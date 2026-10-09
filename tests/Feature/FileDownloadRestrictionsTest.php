@@ -5,6 +5,8 @@ namespace Tests\Feature;
 use App\Models\ClientApplication;
 use App\Models\FileDownloadLink;
 use App\Models\FileRecord;
+use App\Models\User;
+use Database\Seeders\SuperAdminSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Storage;
@@ -52,6 +54,8 @@ class FileDownloadRestrictionsTest extends TestCase
             'storage_path' => $storagePath,
             'status' => 'clean',
         ]);
+
+        $this->seed(SuperAdminSeeder::class);
     }
 
     protected function authHeaders(): array
@@ -172,9 +176,10 @@ class FileDownloadRestrictionsTest extends TestCase
 
         $downloadUrl = $response->json('download_url');
         $token = $response->json('link_token');
+        $superadmin = User::where('username', 'superadmin')->first();
 
         // Revoke the link via management toggle
-        $toggleResp = $this->postJson("/api/management/links/{$token}/revoke-toggle");
+        $toggleResp = $this->actingAs($superadmin)->postJson("/api/management/links/{$token}/revoke-toggle");
         $toggleResp->assertStatus(200)
             ->assertJsonPath('link.is_revoked', true);
 
@@ -207,8 +212,10 @@ class FileDownloadRestrictionsTest extends TestCase
 
     public function test_management_api_can_list_filter_and_create_links(): void
     {
+        $superadmin = User::where('username', 'superadmin')->first();
+
         // 1. Create a link via Management API
-        $createResp = $this->postJson('/api/management/links', [
+        $createResp = $this->actingAs($superadmin)->postJson('/api/management/links', [
             'file_uuid' => $this->cleanFile->uuid,
             'expires_in_minutes' => 120,
             'max_downloads' => 5,
@@ -220,12 +227,12 @@ class FileDownloadRestrictionsTest extends TestCase
             ->assertJsonPath('link.has_password', true);
 
         // 2. List links
-        $listResp = $this->getJson('/api/management/links');
+        $listResp = $this->actingAs($superadmin)->getJson('/api/management/links');
         $listResp->assertStatus(200);
         $this->assertNotEmpty($listResp->json('data'));
 
         // 3. Purge expired links endpoint
-        $purgeResp = $this->postJson('/api/management/links/purge-expired');
+        $purgeResp = $this->actingAs($superadmin)->postJson('/api/management/links/purge-expired');
         $purgeResp->assertStatus(200)
             ->assertJsonStructure(['message', 'purged_count']);
     }
@@ -264,7 +271,7 @@ class FileDownloadRestrictionsTest extends TestCase
         $this->assertStringContainsString('/d/'.$token, $portalUrl);
     }
 
-    public function test_short_portal_routes_serve_app_view_and_file_info(): void
+    public function test_short_portal_routes_serve_app_view_when_restricted_and_stream_when_unrestricted(): void
     {
         $link = FileDownloadLink::create([
             'token' => (string) Str::uuid(),
@@ -275,10 +282,10 @@ class FileDownloadRestrictionsTest extends TestCase
             'expires_at' => now()->addHour(),
         ]);
 
-        // 1. Browser visit to /d/{token} loads the app view
+        // 1. Browser visit to fully allowed unrestricted link streams directly without GUI
         $portalResp = $this->get('/d/'.$link->token, ['Accept' => 'text/html']);
         $portalResp->assertStatus(200);
-        $portalResp->assertViewIs('app');
+        $this->assertEquals($this->fileContent, $portalResp->streamedContent());
 
         // 2. Info request to /d/{token}/info returns metadata
         $infoResp = $this->getJson('/d/'.$link->token.'/info');
@@ -287,10 +294,11 @@ class FileDownloadRestrictionsTest extends TestCase
             ->assertJsonPath('file.status', 'clean')
             ->assertJsonPath('link.is_expired', false);
 
-        // 3. Direct stream via /d/{token}?stream=1
-        $streamResp = $this->get('/d/'.$link->token.'?stream=1');
-        $streamResp->assertStatus(200);
-        $this->assertEquals($this->fileContent, $streamResp->streamedContent());
+        // 3. Browser visit to restricted link (e.g. revoked) renders GUI app
+        $link->update(['is_revoked' => true]);
+        $revokedBrowserResp = $this->get('/d/'.$link->token, ['Accept' => 'text/html']);
+        $revokedBrowserResp->assertStatus(200);
+        $revokedBrowserResp->assertViewIs('app');
     }
 
     public function test_short_portal_with_password_enforcement(): void
@@ -304,6 +312,11 @@ class FileDownloadRestrictionsTest extends TestCase
             'is_revoked' => false,
             'expires_at' => now()->addHour(),
         ]);
+
+        // Browser navigation with password protection renders GUI app to enter password
+        $guiResp = $this->get('/d/'.$link->token, ['Accept' => 'text/html']);
+        $guiResp->assertStatus(200);
+        $guiResp->assertViewIs('app');
 
         // Direct stream without password should be 401
         $deniedResp = $this->getJson('/d/'.$link->token.'?stream=1');

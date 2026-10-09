@@ -36,14 +36,14 @@ class FileUploadController extends Controller
         $mimeType = $uploadedFile->getClientMimeType() ?: 'application/octet-stream';
         $sizeBytes = $uploadedFile->getSize();
         $storedFilename = (string) Str::uuid().'_'.preg_replace('/[^a-zA-Z0-9_\.-]/', '_', $originalFilename);
-        $storagePath = 'uploads/'.$client->uuid.'/'.$storedFilename;
+        $storagePath = 'uploads/'.$client->getStorageFolder().'/'.$storedFilename;
 
         // Compute sha256 checksum
         $sha256 = hash_file('sha256', $uploadedFile->getRealPath());
 
         // Store directly into staging disk (restricted quarantine staging)
         $stagingDisk = Storage::disk('staging');
-        $stagingDisk->putFileAs('uploads/'.$client->uuid, $uploadedFile, $storedFilename);
+        $stagingDisk->putFileAs('uploads/'.$client->getStorageFolder(), $uploadedFile, $storedFilename);
 
         $fileRecord = FileRecord::create([
             'client_application_id' => $client->id,
@@ -179,11 +179,11 @@ class FileUploadController extends Controller
 
         $stagingDisk = Storage::disk('staging');
         $storedFilename = (string) Str::uuid().'_'.preg_replace('/[^a-zA-Z0-9_\.-]/', '_', $validated['filename']);
-        $finalStoragePath = 'uploads/'.$client->uuid.'/'.$storedFilename;
+        $finalStoragePath = 'uploads/'.$client->getStorageFolder().'/'.$storedFilename;
         $finalAbsolutePath = $stagingDisk->path($finalStoragePath);
 
         // Ensure target directory exists
-        $stagingDisk->makeDirectory('uploads/'.$client->uuid);
+        $stagingDisk->makeDirectory('uploads/'.$client->getStorageFolder());
 
         $outHandle = fopen($finalAbsolutePath, 'wb');
         if ($outHandle === false) {

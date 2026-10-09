@@ -108,7 +108,14 @@ class FileDownloadController extends Controller
      */
     public function linkInfo(Request $request, string $uuid): JsonResponse
     {
-        $file = FileRecord::where('uuid', $uuid)->firstOrFail();
+        $file = FileRecord::where('uuid', $uuid)->first();
+        if (! $file) {
+            return response()->json([
+                'error' => 'FileNotFound',
+                'message' => 'The requested file could not be found in this storage system.',
+            ], Response::HTTP_NOT_FOUND);
+        }
+
         $linkToken = $request->query('link');
 
         // Check if the request has a valid signature directly for this URL or against the download route URL

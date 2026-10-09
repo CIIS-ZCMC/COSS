@@ -5,6 +5,8 @@ namespace Tests\Feature;
 use App\Models\ClientApplication;
 use App\Models\FileDownloadLink;
 use App\Models\FileRecord;
+use App\Models\User;
+use Database\Seeders\SuperAdminSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Storage;
@@ -49,10 +51,14 @@ class FileLinkUpdateExpirationTest extends TestCase
             'storage_path' => $storagePath,
             'status' => 'clean',
         ]);
+
+        $this->seed(SuperAdminSeeder::class);
     }
 
     public function test_updating_link_expiration_via_iso_string_updates_db_and_generates_valid_signed_url(): void
     {
+        $superadmin = User::where('username', 'superadmin')->first();
+
         // 1. Create initial link expiring in 30 minutes
         $initialExpiry = now()->addMinutes(30);
         $link = FileDownloadLink::create([
@@ -67,7 +73,7 @@ class FileLinkUpdateExpirationTest extends TestCase
         $newTargetTime = now()->addHours(5)->startOfSecond();
         $isoString = $newTargetTime->toISOString();
 
-        $response = $this->putJson("/api/management/links/{$link->token}", [
+        $response = $this->actingAs($superadmin)->putJson("/api/management/links/{$link->token}", [
             'expires_at' => $isoString,
         ]);
 
@@ -105,7 +111,8 @@ class FileLinkUpdateExpirationTest extends TestCase
         ]);
 
         $pastTime = now()->subMinutes(10)->startOfSecond();
-        $response = $this->putJson("/api/management/links/{$link->token}", [
+        $superadmin = User::where('username', 'superadmin')->first();
+        $response = $this->actingAs($superadmin)->putJson("/api/management/links/{$link->token}", [
             'expires_at' => $pastTime->toISOString(),
         ]);
 
